@@ -11,5 +11,33 @@ pipeline {
                 echo 'Testing...'
             }
         }
+        stage('Security Scan') {
+            steps {
+                echo 'Scanning for vulnerabilities...'
+                sh '''
+                    pip install bandit --quiet
+                    bandit -r . -f json -o bandit.json || true
+                '''
+            }
+        }
+        stage('Check Vulnerabilities') {
+            steps {
+                sh '''
+                    python3 - <<'PY'
+import json, sys
+d=json.load(open("bandit.json"))
+vuln=[x for x in d["results"] if x["issue_severity"] in ("MEDIUM","HIGH")]
+if vuln:
+    print("Security issues found:")
+    for v in vuln:
+        print(f"{v['filename']} | {v['issue_severity']} | {v['issue_text']}")
+    sys.exit(1)
+else:
+    print("No vulnerabilities found.")
+PY
+                '''
+            }
+        }
     }
 }
+
