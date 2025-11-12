@@ -6,34 +6,57 @@ pipeline {
                 echo 'Building...'
             }
         }
+
         stage('Test') {
             steps {
                 echo 'Testing...'
             }
         }
+
         stage('Security Scan') {
             steps {
                 echo 'Scanning for vulnerabilities...'
                 sh '''
-                    pip install bandit --quiet
-                    bandit -r . -f json -o bandit.json || true
+                    # Vérifier python3 et pip3
+                    python3 --version
+                    pip3 --version
+
+                    # Installer bandit localement
+                    pip3 install --user --upgrade bandit
+
+                    # Lancer le scan et générer bandit.json
+                    ~/.local/bin/bandit -r . -f json -o bandit.json || true
+
+                    # Debug: lister et afficher le début du fichier
+                    ls -la bandit.json
+                    head -n 20 bandit.json
                 '''
             }
         }
+
         stage('Check Vulnerabilities') {
             steps {
                 sh '''
                     python3 - <<'PY'
-import json, sys
-d=json.load(open("bandit.json"))
-vuln=[x for x in d["results"] if x["issue_severity"] in ("MEDIUM","HIGH")]
+import json, sys, os
+
+# Vérifier si le fichier existe
+if not os.path.exists("bandit.json"):
+    print("bandit.json not found")
+    sys.exit(1)
+
+# Charger le fichier JSON
+d = json.load(open("bandit.json"))
+vuln = [x for x in d.get("results", []) if x.get("issue_severity") in ("MEDIUM","HIGH")]
+
+# Afficher les vulnérabilités et échouer le build si nécessaire
 if vuln:
-    print("Security issues found:")
+    print("Security issues found:", len(vuln))
     for v in vuln:
-        print(f"{v['filename']} | {v['issue_severity']} | {v['issue_text']}")
+        print(f"{v.get('filename')} | {v.get('issue_severity')} | {v.get('issue_text')}")
     sys.exit(1)
 else:
-    print("No vulnerabilities found.")
+    print("No MEDIUM/HIGH vulnerabilities")
 PY
                 '''
             }
