@@ -27,16 +27,14 @@ pipeline {
         }
 
         stage('Security Scan - Bandit') {
-            steps {
-                sh '''
-                echo "Running Bandit scan..."
-                pip3 install --upgrade bandit
-                python3 -m bandit -r . -f json -o bandit.json || true
-                ls -la bandit.json
-                head -n 20 bandit.json
-                '''
-            }
-        }
+    steps {
+        echo 'Running Bandit scan...'
+        sh 'python3 -m pip install --upgrade bandit' // optionnel si déjà global
+        sh '/usr/local/bin/bandit -r . -f json -o bandit.json'
+        sh 'head -n 20 bandit.json'
+    }
+}
+
 
         stage('Check Bandit Vulnerabilities') {
             steps {
