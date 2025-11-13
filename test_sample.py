@@ -1,9 +1,8 @@
-# test_sample.py
+def test_addition():
+    assert 2 + 3 == 5
 
-def add(a, b):
-    return a + b
+def test_subtraction():
+    assert 10 - 4 == 6
 
-def test_add():
-    assert add(2, 3) == 5
-    assert add(0, 0) == 0
-    assert add(-1, 1) == 0
+def test_string():
+    assert "hello".upper() == "HELLO"
