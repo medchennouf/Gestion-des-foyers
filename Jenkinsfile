@@ -28,7 +28,7 @@ pipeline {
                 sh '''
                 echo "Running Bandit scan..."
                 pip3 install --upgrade bandit
-                $BANDIT_CMD -r . -f json -o bandit.json || true
+                python3 -m bandit -r . -f json -o bandit.json || true
                 ls -la bandit.json
                 head -n 20 bandit.json
                 '''
