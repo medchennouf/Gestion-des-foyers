@@ -2,7 +2,8 @@ pipeline {
     agent any
 
     environment {
-        BANDIT_CMD = "~/.local/bin/bandit"
+        PATH = "${env.HOME}/.local/bin:${env.PATH}"
+        BANDIT_CMD = "${env.HOME}/.local/bin/bandit"
     }
 
     stages {
@@ -17,7 +18,7 @@ pipeline {
             steps {
                 echo 'Running tests...'
                 sh '''
-                # Exemple : si tu as pytest
+                which pytest
                 pytest --maxfail=1 --disable-warnings -q
                 '''
             }
@@ -150,3 +151,4 @@ PY
     }
 }
 
+             
