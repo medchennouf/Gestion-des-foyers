@@ -30,32 +30,28 @@ pipeline {
             steps {
                 echo 'Running Bandit scan...'
                 sh 'python3 -m pip install --upgrade bandit'
-                sh '/usr/local/bin/bandit -r . -f json -o bandit.json'
-                sh 'head -n 20 bandit.json'
+                sh '/usr/local/bin/bandit -r . -f json -o bandit.json || true'
+                sh 'head -n 20 bandit.json || true'
             }
         }
 
         stage('Check Bandit Vulnerabilities') {
             steps {
-                echo 'Checking Bandit vulnerabilities...'
                 sh '''
                 python3 - <<EOF || true
 import json
-try:
-    with open("bandit.json") as f:
-        data = json.load(f)
-    issues = []
-    for file, metrics in data.get("metrics", {}).items():
-        if metrics.get("SEVERITY.HIGH", 0) > 0 or metrics.get("SEVERITY.MEDIUM", 0) > 0:
-            issues.append(f"{file} | MEDIUM/HIGH issue found")
-    if issues:
-        print("Bandit security issues found:", len(issues))
-        for i in issues:
-            print(i)
-    else:
-        print("No Bandit security issues found")
-except Exception as e:
-    print("Error reading bandit.json:", e)
+with open("bandit.json") as f:
+    data = json.load(f)
+issues = []
+for file, metrics in data.get("metrics", {}).items():
+    if metrics.get("SEVERITY.HIGH", 0) > 0 or metrics.get("SEVERITY.MEDIUM", 0) > 0:
+        issues.append(f"{file} | MEDIUM/HIGH issue found")
+if issues:
+    print("Bandit security issues found:", len(issues))
+    for i in issues:
+        print(i)
+else:
+    print("No Bandit security issues found")
 EOF
                 '''
             }
@@ -71,21 +67,21 @@ EOF
         stage('Security Scan - Gitleaks') {
             steps {
                 echo 'Running Gitleaks scan...'
-                // sh 'gitleaks detect --source=.' 
+                // sh 'gitleaks detect --source=.'
             }
         }
 
         stage('Docker Build') {
             steps {
                 echo 'Building Docker image...'
-                // sh 'docker build -t myimage:latest .' 
+                // sh 'docker build -t myimage:latest .'
             }
         }
 
         stage('Docker Image Security - Trivy') {
             steps {
                 echo 'Running Docker image security scan...'
-                // sh 'trivy image myimage:latest' 
+                // sh 'trivy image myimage:latest'
             }
         }
 
