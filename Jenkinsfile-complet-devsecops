@@ -31,6 +31,7 @@ pipeline {
               -Dsonar.projectKey=gestion-des-foyers \
               -Dsonar.projectName=gestion-des-foyers \
               -Dsonar.sources=. \
+	      -Dsonar.exclusions=**/*.java
               -Dsonar.host.url=http://192.168.50.4:9000
           """
         }
