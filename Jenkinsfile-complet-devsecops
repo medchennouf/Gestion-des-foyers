@@ -1,19 +1,42 @@
 pipeline {
   agent any
+
   environment {
     PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    SEMGREP_API_KEY = credentials('semgrep-api-key')
+    SEMGREP_API_KEY = credentials('semgrep-api-key')   // à créer dans Jenkins
   }
+
   stages {
+
     stage('Checkout') {
       steps { checkout scm }
     }
+
     stage('Build') {
       steps { echo 'Building project...' }
     }
+
     stage('Unit Tests') {
       steps { sh 'pytest --maxfail=1 --disable-warnings -q || true' }
     }
+
+    stage('SonarQube Analysis') {
+      environment {
+        scannerHome = tool 'SonarScanner'              // outil à déclarer dans Jenkins
+      }
+      steps {
+        withSonarQubeEnv('Sonar') {                    // serveur Sonar nommé "Sonar"
+          sh """
+            ${scannerHome}/bin/sonar-scanner \
+              -Dsonar.projectKey=gestion-des-foyers \
+              -Dsonar.projectName=gestion-des-foyers \
+              -Dsonar.sources=. \
+              -Dsonar.host.url=http://192.168.50.4:9000
+          """
+        }
+      }
+    }
+
     stage('SAST - Bandit') {
       steps {
         sh '''
@@ -22,6 +45,7 @@ pipeline {
         '''
       }
     }
+
     stage('SAST - Semgrep') {
       steps {
         sh '''
@@ -31,72 +55,112 @@ pipeline {
         '''
       }
     }
+
     stage('SCA & FS scan - Trivy') {
       steps {
-        sh 'trivy fs --scanners vuln,config,secret --format json -o trivy-fs.json . || true'
+        sh 'trivy fs --scanners vuln,misconfig,secret --format json -o trivy-fs.json . || true'
       }
     }
+
     stage('Secrets - Gitleaks') {
       steps {
         sh 'gitleaks detect --source . --report-format json --report-path gitleaks.json || true'
       }
     }
+
     stage('Docker Build') {
       steps {
         sh 'docker build -t gestion-foyers:latest . || true'
       }
     }
+
     stage('Trivy - Image scan') {
       steps {
-        sh 'trivy image --scanners vuln,config,secret --format json -o trivy-image.json gestion-foyers:latest || true'
+        sh 'trivy image --scanners vuln,misconfig,secret --format json -o trivy-image.json gestion-foyers:latest || true'
       }
     }
+
     stage('DAST - ZAP Baseline') {
       steps {
         sh '''
           mkdir -p zap-reports
-          docker run --rm -v $(pwd)/zap-reports:/zap/wrk/:rw ghcr.io/zaproxy/zaproxy:latest zap-baseline.py \
-            -t "http://192.168.50.4:8080" \
-            -r baseline_report.html \
-            -J baseline_report.json || true
+          docker run --rm \
+            -v $(pwd)/zap-reports:/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:latest zap-baseline.py \
+              -t "http://192.168.50.4:8080" \
+              -r baseline_report.html \
+              -J baseline_report.json || true
         '''
       }
     }
+
     stage('Final security check') {
       steps {
         sh '''
           python3 - <<'PY' || true
 import json, os, sys
-fail=False
+fail = False
+
+# Bandit
 if os.path.exists("bandit.json"):
-  b=json.load(open("bandit.json"))
-  vuln=[r for r in b.get("results",[]) if r.get("issue_severity") in ("MEDIUM","HIGH")]
-  if vuln: print("Bandit MEDIUM/HIGH:", len(vuln)); fail=True
+  b = json.load(open("bandit.json"))
+  vuln = [r for r in b.get("results", []) if r.get("issue_severity") in ("MEDIUM", "HIGH")]
+  if vuln:
+    print("Bandit MEDIUM/HIGH:", len(vuln))
+    fail = True
+
+# Semgrep
 if os.path.exists("semgrep.json"):
-  s=json.load(open("semgrep.json"))
-  if s.get("results"): print("Semgrep findings:", len(s.get("results"))); fail=True
+  s = json.load(open("semgrep.json"))
+  if s.get("results"):
+    print("Semgrep findings:", len(s.get("results")))
+    fail = True
+
+# Trivy FS
 if os.path.exists("trivy-fs.json"):
-  t=json.load(open("trivy-fs.json"))
-  has=[r for r in t.get("Results",[]) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
-  if has: print("Trivy FS issues:", len(has)); fail=True
+  t = json.load(open("trivy-fs.json"))
+  has = [r for r in t.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
+  if has:
+    print("Trivy FS issues:", len(has))
+    fail = True
+
+# Trivy Image
 if os.path.exists("trivy-image.json"):
-  ti=json.load(open("trivy-image.json"))
-  hasimg=[r for r in ti.get("Results",[]) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
-  if hasimg: print("Trivy image issues:", len(hasimg)); fail=True
+  ti = json.load(open("trivy-image.json"))
+  hasimg = [r for r in ti.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
+  if hasimg:
+    print("Trivy image issues:", len(hasimg))
+    fail = True
+
+# Gitleaks
 if os.path.exists("gitleaks.json"):
-  g=json.load(open("gitleaks.json"))
-  if g: print("Gitleaks secrets found:", len(g)); fail=True
+  g = json.load(open("gitleaks.json"))
+  if g:
+    print("Gitleaks secrets found:", len(g))
+    fail = True
+
+# ZAP baseline
 if os.path.exists("zap-reports/baseline_report.json"):
-  z=json.load(open("zap-reports/baseline_report.json"))
-  fails=z.get("fail",0) if isinstance(z,dict) else 0
-  if fails: print("ZAP baseline fail:", fails); fail=True
-if fail: print("Security gates failed"); sys.exit(1)
-else: print("All clear")
+  try:
+    z = json.load(open("zap-reports/baseline_report.json"))
+    fails = z.get("fail", 0) if isinstance(z, dict) else 0
+    if fails:
+      print("ZAP baseline fail:", fails)
+      fail = True
+  except Exception as e:
+    print("Unable to parse ZAP baseline_report.json:", e)
+
+if fail:
+  print("Security gates failed")
+  sys.exit(1)
+else:
+  print("All clear")
 PY
         '''
       }
     }
   }
+
   post {
     always {
       archiveArtifacts artifacts: '**/*.json', allowEmptyArchive: true
