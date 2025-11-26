@@ -163,21 +163,25 @@ PY
   } // stages
 
   post {
-    always {
-      archiveArtifacts artifacts: '**/*.json', allowEmptyArchive: true
-      archiveArtifacts artifacts: 'zap-reports/*', allowEmptyArchive: true
-      echo 'Reports archived'
-      publishHTML([
-        reportDir: 'zap-reports',
-        reportFiles: 'baseline_report.html',
-        reportName: 'OWASP ZAP Report'
-      ])
-    }
-    failure {
-      echo 'Build failed due to security gates'
-    }
-    success {
-      echo 'Pipeline succeeded'
-    }
+  always {
+    archiveArtifacts artifacts: '**/*.json', allowEmptyArchive: true
+    archiveArtifacts artifacts: 'zap-reports/*', allowEmptyArchive: true
+    echo 'Reports archived'
+    publishHTML([
+      reportDir: 'zap-reports',
+      reportFiles: 'baseline_report.html',
+      reportName: 'OWASP ZAP Report',
+      allowMissing: true,
+      keepAll: true,
+      alwaysLinkToLastBuild: true
+    ])
   }
+  failure {
+    echo 'Build failed due to security gates'
+  }
+  success {
+    echo 'Pipeline succeeded'
+  }
+}
+
 }
