@@ -1,101 +1,183 @@
 pipeline {
-    agent any
+  agent any
+  environment {
+    PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    SEMGREP_API_KEY = credentials('semgrep-api-key') // crée cette credential dans Jenkins
+  }
 
-    environment {
-        PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+  stages {
+
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-    stages {
+    stage('Build') {
+      steps { echo 'Building project...' }
+    }
 
-        stage('Checkout SCM') {
-            steps {
-                checkout scm
-            }
-        }
+    stage('Unit Tests') {
+      steps {
+        echo 'Running unit tests'
+        sh 'pytest --maxfail=1 --disable-warnings -q || true'
+      }
+    }
 
-        stage('Build') {
-            steps {
-                echo 'Building project...'
-            }
-        }
+    stage('SAST - Bandit') {
+      steps {
+        echo 'Running Bandit'
+        sh '''
+          python3 -m pip install --user --upgrade bandit || true
+          bandit -r . -f json -o bandit.json || true
+          head -n 40 bandit.json || true
+        '''
+      }
+    }
 
-        stage('Unit Tests') {
-            steps {
-                echo 'Running tests...'
-                sh 'pytest --maxfail=1 --disable-warnings -q'
-            }
-        }
+    stage('SAST - Semgrep') {
+      steps {
+        echo 'Running Semgrep (with Pro rules)'
+        sh '''
+          python3 -m pip install --user --upgrade semgrep || true
+          semgrep login --api-key $SEMGREP_API_KEY
+          semgrep --config=p/ci --json --output semgrep.json || true
+          head -n 40 semgrep.json || true
+        '''
+      }
+    }
 
-        stage('Security Scan - Bandit') {
-            steps {
-                echo 'Running Bandit scan...'
-                sh 'python3 -m pip install --upgrade bandit'
-                sh '/usr/local/bin/bandit -r . -f json -o bandit.json || true'
-                sh 'head -n 20 bandit.json || true'
-            }
-        }
+    stage('SCA & FS scan - Trivy') {
+      steps {
+        echo 'Running Trivy FS & SCA'
+        sh '''
+          trivy fs --scanners vuln,config,secret --format json -o trivy-fs.json . || true
+          head -n 40 trivy-fs.json || true
+        '''
+      }
+    }
 
-        stage('Check Bandit Vulnerabilities') {
-            steps {
-                sh '''
-                python3 - <<EOF || true
-import json
-with open("bandit.json") as f:
-    data = json.load(f)
-issues = []
-for file, metrics in data.get("metrics", {}).items():
-    if metrics.get("SEVERITY.HIGH", 0) > 0 or metrics.get("SEVERITY.MEDIUM", 0) > 0:
-        issues.append(f"{file} | MEDIUM/HIGH issue found")
-if issues:
-    print("Bandit security issues found:", len(issues))
-    for i in issues:
-        print(i)
+    stage('Secrets - Gitleaks') {
+      steps {
+        echo 'Running Gitleaks'
+        sh '''
+          gitleaks detect --source . --report-format json --report-path gitleaks.json || true
+          head -n 40 gitleaks.json || true
+        '''
+      }
+    }
+
+    stage('Docker Build') {
+      steps {
+        echo 'Docker build'
+        sh 'docker build -t gestion-foyers:latest . || true'
+      }
+    }
+
+    stage('Trivy - Image scan') {
+      steps {
+        echo 'Trivy image scan'
+        sh '''
+          trivy image --scanners vuln,config,secret --format json -o trivy-image.json gestion-foyers:latest || true
+          head -n 40 trivy-image.json || true
+        '''
+      }
+    }
+
+    stage('DAST - ZAP Baseline') {
+      steps {
+        echo 'Running ZAP DAST Baseline scan...'
+        sh '''
+          mkdir -p zap-reports
+          docker run --rm -v $(pwd)/zap-reports:/zap/wrk/:rw ghcr.io/zaproxy/zaproxy:latest zap-baseline.py \
+            -t "http://192.168.50.4:8080" \
+            -r baseline_report.html \
+            -J baseline_report.json || true
+        '''
+        archiveArtifacts artifacts: 'zap-reports/*'
+      }
+    }
+
+    stage('Final security check') {
+      steps {
+        echo 'Final security gates'
+        sh '''
+          python3 - <<'PY' || true
+import json, os, sys
+fail=False
+
+# Bandit
+if os.path.exists("bandit.json"):
+  b=json.load(open("bandit.json"))
+  vuln=[r for r in b.get("results",[]) if r.get("issue_severity") in ("MEDIUM","HIGH")]
+  if vuln:
+    print("Bandit MEDIUM/HIGH:", len(vuln))
+    fail=True
+
+# Semgrep
+if os.path.exists("semgrep.json"):
+  s=json.load(open("semgrep.json"))
+  if s.get("results"):
+    print("Semgrep findings:", len(s.get("results")))
+    fail=True
+
+# Trivy FS
+if os.path.exists("trivy-fs.json"):
+  t=json.load(open("trivy-fs.json"))
+  has=[r for r in t.get("Results",[]) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
+  if has:
+    print("Trivy FS issues:", len(has))
+    fail=True
+
+# Trivy Image
+if os.path.exists("trivy-image.json"):
+  ti=json.load(open("trivy-image.json"))
+  hasimg=[r for r in ti.get("Results",[]) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
+  if hasimg:
+    print("Trivy image issues:", len(hasimg))
+    fail=True
+
+# Gitleaks
+if os.path.exists("gitleaks.json"):
+  g=json.load(open("gitleaks.json"))
+  if g:
+    print("Gitleaks secrets found:", len(g))
+    fail=True
+
+# ZAP report
+if os.path.exists("zap-reports/baseline_report.json"):
+  z=json.load(open("zap-reports/baseline_report.json"))
+  fails=z.get("fail",0) if isinstance(z,dict) else 0
+  if fails:
+    print("ZAP baseline fail:", fails)
+    fail=True
+
+if fail:
+  print("Security gates failed")
+  sys.exit(1)
 else:
-    print("No Bandit security issues found")
-EOF
-                '''
-            }
-        }
-
-        stage('Security Scan - Trivy FS') {
-            steps {
-                echo 'Running Trivy FS scan...'
-                // sh 'trivy fs .' 
-            }
-        }
-
-        stage('Security Scan - Gitleaks') {
-            steps {
-                echo 'Running Gitleaks scan...'
-                // sh 'gitleaks detect --source=.'
-            }
-        }
-
-        stage('Docker Build') {
-            steps {
-                echo 'Building Docker image...'
-                // sh 'docker build -t myimage:latest .'
-            }
-        }
-
-        stage('Docker Image Security - Trivy') {
-            steps {
-                echo 'Running Docker image security scan...'
-                // sh 'trivy image myimage:latest'
-            }
-        }
-
-        stage('Final Security Check') {
-            steps {
-                echo 'Performing final security check...'
-            }
-        }
+  print("All clear")
+PY
+        '''
+      }
     }
 
-    post {
-        always {
-            archiveArtifacts artifacts: '**/*.json', allowEmptyArchive: true
-            echo 'Security reports archived'
-        }
+  } // stages
+
+  post {
+    always {
+      archiveArtifacts artifacts: '**/*.json', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'zap-reports/*', allowEmptyArchive: true
+      echo 'Reports archived'
+      publishHTML([
+        reportDir: 'zap-reports',
+        reportFiles: 'baseline_report.html',
+        reportName: 'OWASP ZAP Report'
+      ])
     }
+    failure {
+      echo 'Build failed due to security gates'
+    }
+    success {
+      echo 'Pipeline succeeded'
+    }
+  }
 }
