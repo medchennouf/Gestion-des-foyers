@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Rapports et sorties d'outils de sécurité
+*.json
+*.tar.gz
+zap-reports/
+.semgrep/
+data/
+baseline_report.html
