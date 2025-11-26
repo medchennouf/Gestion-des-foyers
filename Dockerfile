@@ -1,7 +1,21 @@
-FROM python:3.11
-COPY . /app
+FROM python:3.10-slim
+
+# Create non-root user
+ENV APP_USER=appuser
+RUN useradd -m -s /bin/bash $APP_USER
+
 WORKDIR /app
-RUN pip install -r requirements.txt
-RUN adduser --disabled-password --gecos "" appuser
-USER appuser
+
+# Copy only necessary files
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# Use non-root user
+USER $APP_USER
+
+# Expose and default command (adapt to ton app)
+EXPOSE 8080
 CMD ["python", "app.py"]
+
