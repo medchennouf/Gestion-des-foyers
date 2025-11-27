@@ -34,6 +34,7 @@ build/
 
 # Rapports et sorties d'outils de sécurité
 *.json
+!gitleaks-baseline.json
 *.tar.gz
 zap-reports/
 .semgrep/
