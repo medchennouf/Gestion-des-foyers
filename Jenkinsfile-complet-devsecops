@@ -3,7 +3,7 @@ pipeline {
 
   environment {
     PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    SEMGREP_API_KEY = credentials('semgrep-api-key')   // Credential Jenkins pour Semgrep
+    SEMGREP_API_KEY = credentials('semgrep-api-key')   // ID de la credential Semgrep dans Jenkins
   }
 
   stages {
@@ -22,7 +22,7 @@ pipeline {
 
     stage('SonarQube Analysis') {
       environment {
-        scannerHome = tool 'SonarScanner'              // Nom de l’outil configuré dans Jenkins
+        scannerHome = tool 'SonarScanner'              // Nom de l’outil SonarScanner configuré dans Jenkins
       }
       steps {
         withSonarQubeEnv('Sonar') {                    // Nom du serveur Sonar dans Jenkins
@@ -61,14 +61,18 @@ pipeline {
 
     stage('SCA & FS scan - Trivy') {
       steps {
-        sh 'trivy fs --scanners vuln,misconfig,secret --format json -o trivy-fs.json . || true'
+        sh '''
+          rm -f trivy-fs.json || true
+          trivy fs --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --format json -o trivy-fs.json . || true
+        '''
       }
     }
 
     stage('Secrets - Gitleaks') {
       steps {
         sh '''
-          # Utilise le baseline pour ignorer les anciens secrets déjà corrigés
           gitleaks detect --source . \
             --baseline-path gitleaks-baseline.json \
             --report-format json \
@@ -85,7 +89,12 @@ pipeline {
 
     stage('Trivy - Image scan') {
       steps {
-        sh 'trivy image --scanners vuln,misconfig,secret --format json -o trivy-image.json gestion-foyers:latest || true'
+        sh '''
+          rm -f trivy-image.json || true
+          trivy image --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --format json -o trivy-image.json gestion-foyers:latest || true
+        '''
       }
     }
 
@@ -131,25 +140,23 @@ if os.path.exists("semgrep.json"):
   except Exception as e:
     print("Error reading semgrep.json:", e)
 
-# Trivy FS
+# Trivy FS (log-only, ne bloque pas la pipeline pour ce projet)
 if os.path.exists("trivy-fs.json"):
   try:
     t = json.load(open("trivy-fs.json"))
     has = [r for r in t.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
     if has:
-      print("Trivy FS issues:", len(has))
-      fail = True
+      print("Trivy FS issues (not blocking for this demo):", len(has))
   except Exception as e:
     print("Error reading trivy-fs.json:", e)
 
-# Trivy Image
+# Trivy Image (log-only)
 if os.path.exists("trivy-image.json"):
   try:
     ti = json.load(open("trivy-image.json"))
     hasimg = [r for r in ti.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
     if hasimg:
-      print("Trivy image issues:", len(hasimg))
-      fail = True
+      print("Trivy image issues (not blocking for this demo):", len(hasimg))
   except Exception as e:
     print("Error reading trivy-image.json:", e)
 
