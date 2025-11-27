@@ -59,7 +59,6 @@ pipeline {
       steps {
         sh '''
           python3 -m pip install --user --upgrade semgrep || true
-          semgrep login --api-key $SEMGREP_API_KEY || true
           semgrep --config=p/ci --json --output semgrep.json || true
         '''
       }
@@ -107,7 +106,9 @@ pipeline {
     stage('DAST - ZAP Baseline') {
       steps {
         sh '''
+          rm -rf zap-reports
           mkdir -p zap-reports
+          chmod 777 zap-reports
           docker run --rm \
             -v $(pwd)/zap-reports:/zap/wrk/:rw \
             ghcr.io/zaproxy/zaproxy:latest zap-baseline.py \
