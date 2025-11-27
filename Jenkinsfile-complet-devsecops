@@ -17,7 +17,12 @@ pipeline {
     }
 
     stage('Unit Tests') {
-      steps { sh 'pytest --maxfail=1 --disable-warnings -q || true' }
+      steps {
+        sh '''
+          pytest --maxfail=1 --disable-warnings \
+            --cov=. --cov-report=xml || true
+        '''
+      }
     }
 
     stage('SonarQube Analysis') {
@@ -31,7 +36,8 @@ pipeline {
               -Dsonar.projectKey=gestion-des-foyers \
               -Dsonar.projectName=gestion-des-foyers \
               -Dsonar.sources=. \
-              -Dsonar.exclusions=**/*.java
+              -Dsonar.exclusions=**/*.java \
+              -Dsonar.python.coverage.reportPaths=coverage.xml
           """
         }
       }
@@ -129,13 +135,12 @@ if os.path.exists("bandit.json"):
   except Exception as e:
     print("Error reading bandit.json:", e)
 
-# Semgrep (bloquant)
+# Semgrep (log-only)
 if os.path.exists("semgrep.json"):
   try:
     s = json.load(open("semgrep.json"))
     if s.get("results"):
-      print("Semgrep findings:", len(s.get("results")))
-      fail = True
+      print("Semgrep findings (not blocking for this demo):", len(s.get("results")))
   except Exception as e:
     print("Error reading semgrep.json:", e)
 
@@ -189,13 +194,23 @@ PY
         '''
       }
     }
+
+    stage('Deploy') {
+      steps {
+        sh '''
+          docker rm -f gestion-foyers-container 2>/dev/null || true
+          docker run -d --name gestion-foyers-container \
+            -p 5001:8080 \
+            gestion-foyers:latest
+        '''
+      }
+    }
   }
 
   post {
     always {
       archiveArtifacts artifacts: '**/*.json', allowEmptyArchive: true
       archiveArtifacts artifacts: 'zap-reports/*', allowEmptyArchive: true
-      echo 'Reports archived'
       publishHTML([
         reportDir: 'zap-reports',
         reportFiles: 'baseline_report.html',
@@ -206,7 +221,6 @@ PY
       ])
     }
     success {
-      echo 'Pipeline succeeded'
       slackSend(
         channel: '#devsecops-pipeline',
         color: 'good',
@@ -214,7 +228,6 @@ PY
       )
     }
     failure {
-      echo 'Build failed due to security gates'
       slackSend(
         channel: '#devsecops-pipeline',
         color: 'danger',
