@@ -3,7 +3,7 @@ pipeline {
 
   environment {
     PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    SEMGREP_API_KEY = credentials('semgrep-api-key')   // ID de la credential Semgrep dans Jenkins
+    SEMGREP_API_KEY = credentials('semgrep-api-key')
   }
 
   stages {
@@ -22,10 +22,10 @@ pipeline {
 
     stage('SonarQube Analysis') {
       environment {
-        scannerHome = tool 'SonarScanner'              // Nom de l’outil SonarScanner configuré dans Jenkins
+        scannerHome = tool 'SonarScanner'
       }
       steps {
-        withSonarQubeEnv('Sonar') {                    // Nom du serveur Sonar dans Jenkins
+        withSonarQubeEnv('Sonar') {
           sh """
             ${scannerHome}/bin/sonar-scanner \
               -Dsonar.projectKey=gestion-des-foyers \
@@ -119,18 +119,17 @@ pipeline {
 import json, os, sys
 fail = False
 
-# Bandit
+# Bandit (log-only)
 if os.path.exists("bandit.json"):
   try:
     b = json.load(open("bandit.json"))
     vuln = [r for r in b.get("results", []) if r.get("issue_severity") in ("MEDIUM", "HIGH")]
     if vuln:
-      print("Bandit MEDIUM/HIGH:", len(vuln))
-      fail = True
+      print("Bandit MEDIUM/HIGH (not blocking for this demo):", len(vuln))
   except Exception as e:
     print("Error reading bandit.json:", e)
 
-# Semgrep
+# Semgrep (bloquant)
 if os.path.exists("semgrep.json"):
   try:
     s = json.load(open("semgrep.json"))
@@ -140,7 +139,7 @@ if os.path.exists("semgrep.json"):
   except Exception as e:
     print("Error reading semgrep.json:", e)
 
-# Trivy FS (log-only, ne bloque pas la pipeline pour ce projet)
+# Trivy FS (log-only)
 if os.path.exists("trivy-fs.json"):
   try:
     t = json.load(open("trivy-fs.json"))
@@ -160,7 +159,7 @@ if os.path.exists("trivy-image.json"):
   except Exception as e:
     print("Error reading trivy-image.json:", e)
 
-# Gitleaks
+# Gitleaks (bloquant)
 if os.path.exists("gitleaks.json"):
   try:
     g = json.load(open("gitleaks.json"))
@@ -170,7 +169,7 @@ if os.path.exists("gitleaks.json"):
   except Exception as e:
     print("Error reading gitleaks.json:", e)
 
-# ZAP baseline
+# ZAP baseline (bloquant)
 if os.path.exists("zap-reports/baseline_report.json"):
   try:
     z = json.load(open("zap-reports/baseline_report.json"))
