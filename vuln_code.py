@@ -22,7 +22,7 @@ def insecure_sql(user_id):
     cur.execute(query)
     return cur.fetchall()
 
-HARDCODED_PASSWORD = "SuperSecret123"  # code smell / vulnérabilité
+#HARDCODED_PASSWORD = "SuperSecret123"  # code smell / vulnérabilité
 
 def bad_practices(x):
     # Variable non utilisée, complexité inutile
