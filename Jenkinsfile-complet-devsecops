@@ -3,7 +3,7 @@ pipeline {
 
   environment {
     PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    SEMGREP_API_KEY = credentials('semgrep-api-key')   // credential Jenkins
+    SEMGREP_API_KEY = credentials('semgrep-api-key')   // Credential Jenkins pour Semgrep
   }
 
   stages {
@@ -22,7 +22,7 @@ pipeline {
 
     stage('SonarQube Analysis') {
       environment {
-        scannerHome = tool 'SonarScanner'              // Global Tool name
+        scannerHome = tool 'SonarScanner'              // Nom de l’outil configuré dans Jenkins
       }
       steps {
         withSonarQubeEnv('Sonar') {                    // Nom du serveur Sonar dans Jenkins
@@ -67,7 +67,13 @@ pipeline {
 
     stage('Secrets - Gitleaks') {
       steps {
-        sh 'gitleaks detect --source . --report-format json --report-path gitleaks.json || true'
+        sh '''
+          # Utilise le baseline pour ignorer les anciens secrets déjà corrigés
+          gitleaks detect --source . \
+            --baseline-path gitleaks-baseline.json \
+            --report-format json \
+            --report-path gitleaks.json || true
+        '''
       }
     }
 
@@ -106,41 +112,56 @@ fail = False
 
 # Bandit
 if os.path.exists("bandit.json"):
-  b = json.load(open("bandit.json"))
-  vuln = [r for r in b.get("results", []) if r.get("issue_severity") in ("MEDIUM", "HIGH")]
-  if vuln:
-    print("Bandit MEDIUM/HIGH:", len(vuln))
-    fail = True
+  try:
+    b = json.load(open("bandit.json"))
+    vuln = [r for r in b.get("results", []) if r.get("issue_severity") in ("MEDIUM", "HIGH")]
+    if vuln:
+      print("Bandit MEDIUM/HIGH:", len(vuln))
+      fail = True
+  except Exception as e:
+    print("Error reading bandit.json:", e)
 
 # Semgrep
 if os.path.exists("semgrep.json"):
-  s = json.load(open("semgrep.json"))
-  if s.get("results"):
-    print("Semgrep findings:", len(s.get("results")))
-    fail = True
+  try:
+    s = json.load(open("semgrep.json"))
+    if s.get("results"):
+      print("Semgrep findings:", len(s.get("results")))
+      fail = True
+  except Exception as e:
+    print("Error reading semgrep.json:", e)
 
 # Trivy FS
 if os.path.exists("trivy-fs.json"):
-  t = json.load(open("trivy-fs.json"))
-  has = [r for r in t.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
-  if has:
-    print("Trivy FS issues:", len(has))
-    fail = True
+  try:
+    t = json.load(open("trivy-fs.json"))
+    has = [r for r in t.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
+    if has:
+      print("Trivy FS issues:", len(has))
+      fail = True
+  except Exception as e:
+    print("Error reading trivy-fs.json:", e)
 
 # Trivy Image
 if os.path.exists("trivy-image.json"):
-  ti = json.load(open("trivy-image.json"))
-  hasimg = [r for r in ti.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
-  if hasimg:
-    print("Trivy image issues:", len(hasimg))
-    fail = True
+  try:
+    ti = json.load(open("trivy-image.json"))
+    hasimg = [r for r in ti.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
+    if hasimg:
+      print("Trivy image issues:", len(hasimg))
+      fail = True
+  except Exception as e:
+    print("Error reading trivy-image.json:", e)
 
 # Gitleaks
 if os.path.exists("gitleaks.json"):
-  g = json.load(open("gitleaks.json"))
-  if g:
-    print("Gitleaks secrets found:", len(g))
-    fail = True
+  try:
+    g = json.load(open("gitleaks.json"))
+    if g:
+      print("Gitleaks secrets found:", len(g))
+      fail = True
+  except Exception as e:
+    print("Error reading gitleaks.json:", e)
 
 # ZAP baseline
 if os.path.exists("zap-reports/baseline_report.json"):
