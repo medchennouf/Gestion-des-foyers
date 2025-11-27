@@ -19,6 +19,7 @@ pipeline {
     stage('Unit Tests') {
       steps {
         sh '''
+          python3 -m pip install --user pytest pytest-cov || true
           pytest --maxfail=1 --disable-warnings \
             --cov=. --cov-report=xml || true
         '''
