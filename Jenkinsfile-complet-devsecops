@@ -3,7 +3,7 @@ pipeline {
 
   environment {
     PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    SEMGREP_API_KEY = credentials('semgrep-api-key')   // à créer dans Jenkins
+    SEMGREP_API_KEY = credentials('semgrep-api-key')   // credential Jenkins
   }
 
   stages {
@@ -22,16 +22,16 @@ pipeline {
 
     stage('SonarQube Analysis') {
       environment {
-        scannerHome = tool 'SonarScanner'              // outil à déclarer dans Jenkins
+        scannerHome = tool 'SonarScanner'              // Global Tool name
       }
       steps {
-        withSonarQubeEnv('Sonar') {                    // serveur Sonar nommé "Sonar"
+        withSonarQubeEnv('Sonar') {                    // Nom du serveur Sonar dans Jenkins
           sh """
             ${scannerHome}/bin/sonar-scanner \
               -Dsonar.projectKey=gestion-des-foyers \
               -Dsonar.projectName=gestion-des-foyers \
               -Dsonar.sources=. \
-	      -Dsonar.exclusions=**/*.java
+              -Dsonar.exclusions=**/*.java
           """
         }
       }
@@ -47,6 +47,9 @@ pipeline {
     }
 
     stage('SAST - Semgrep') {
+      environment {
+        PATH = "${env.PATH}:${env.HOME}/.local/bin"
+      }
       steps {
         sh '''
           python3 -m pip install --user --upgrade semgrep || true
@@ -97,7 +100,7 @@ pipeline {
     stage('Final security check') {
       steps {
         sh '''
-          python3 - <<'PY' || true
+          python3 - <<'PY'
 import json, os, sys
 fail = False
 
@@ -175,11 +178,21 @@ PY
         alwaysLinkToLastBuild: true
       ])
     }
-    failure {
-      echo 'Build failed due to security gates'
-    }
     success {
       echo 'Pipeline succeeded'
+      slackSend(
+        channel: '#devsecops-pipeline',
+        color: 'good',
+        message: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${env.BUILD_URL}"
+      )
+    }
+    failure {
+      echo 'Build failed due to security gates'
+      slackSend(
+        channel: '#devsecops-pipeline',
+        color: 'danger',
+        message: "FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${env.BUILD_URL}"
+      )
     }
   }
 }
