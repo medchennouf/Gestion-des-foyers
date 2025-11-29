@@ -2,14 +2,29 @@ pipeline {
   agent any
 
   environment {
-    // Adapter si besoin (nom du serveur Sonar dans Jenkins)
-    SONARQUBE_ENV = 'Sonar'
+    SONAR_HOST_URL   = 'http://192.168.50.4:9000'
+    SONAR_PROJECT_KEY = 'gestion-des-foyers'
+    SONAR_LOGIN      = credentials('Sonar')        // cf. ta capture, OK
+    DOCKERHUB_USER   = 'mohamed284'
+    DOCKERHUB_PASS   = credentials('dockerhub-credentials')
+    SLACK_TOKEN      = credentials('slack-token')
   }
 
   stages {
 
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Secrets Scan - Gitleaks') {
+      steps {
+        sh '''
+          docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest \
+            detect -s /repo -f json -r gitleaks-report.json || true
+        '''
+      }
     }
 
     stage('Build & Unit Tests') {
@@ -20,60 +35,56 @@ pipeline {
 
     stage('SonarQube Analysis') {
       environment {
-        scannerHome = tool 'SonarScanner'
+        PATH = "${tool 'sonar-scanner'}/bin:${env.PATH}"
       }
       steps {
-        withSonarQubeEnv(SONARQUBE_ENV) {
-          sh """
-            ${scannerHome}/bin/sonar-scanner \
-              -Dsonar.projectKey=gestion-des-foyers \
-              -Dsonar.projectName=gestion-des-foyers \
-              -Dsonar.sources=src/main/java \
-              -Dsonar.tests=src/test/java \
-              -Dsonar.java.binaries=target/classes \
-              -Dsonar.junit.reportPaths=target/surefire-reports \
-              -Dsonar.jacoco.reportPaths=target/site/jacoco/jacoco.xml
-          """
-        }
+        sh """
+          sonar-scanner \
+            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+            -Dsonar.host.url=${SONAR_HOST_URL} \
+            -Dsonar.login=${SONAR_LOGIN} \
+            -Dsonar.sources=src/main/java \
+            -Dsonar.tests=src/test/java \
+            -Dsonar.junit.reportPaths=target/surefire-reports \
+            -Dsonar.java.binaries=target/classes
+        """
       }
     }
 
     stage('OWASP Dependency Check') {
       steps {
-        sh 'mvn org.owasp:dependency-check-maven:check'
+        sh '''
+          mvn org.owasp:dependency-check-maven:check \
+            -Dformat=HTML -Dformat=XML
+        '''
       }
     }
 
     stage('Docker Build') {
       steps {
-        sh """
-          docker build -t mohamed284/gestion-foyers:latest .
-          docker tag mohamed284/gestion-foyers:latest mohamed284/gestion-foyers:${env.BUILD_NUMBER}
-        """
+        sh '''
+          docker build -t ${DOCKERHUB_USER}/gestion-foyers:latest .
+          docker tag ${DOCKERHUB_USER}/gestion-foyers:latest ${DOCKERHUB_USER}/gestion-foyers:${BUILD_NUMBER}
+        '''
       }
     }
 
     stage('Trivy Image Scan') {
       steps {
         sh '''
-          trivy image --severity HIGH,CRITICAL \
-            --format table mohamed284/gestion-foyers:latest || true
+          trivy image --severity HIGH,CRITICAL ${DOCKERHUB_USER}/gestion-foyers:latest || true
         '''
       }
     }
 
     stage('Push DockerHub') {
       steps {
-        withCredentials([usernamePassword(
-          credentialsId: 'dockerhub-creds',
-          usernameVariable: 'DOCKERHUB_USER',
-          passwordVariable: 'DOCKERHUB_PASS'
-        )]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
           sh '''
-            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-            docker push mohamed284/gestion-foyers:latest
-            docker push mohamed284/gestion-foyers:${BUILD_NUMBER}
-            docker logout || true
+            echo "$PASS" | docker login -u "$USER" --password-stdin
+            docker push ${DOCKERHUB_USER}/gestion-foyers:latest
+            docker push ${DOCKERHUB_USER}/gestion-foyers:${BUILD_NUMBER}
+            docker logout
           '''
         }
       }
@@ -85,7 +96,17 @@ pipeline {
           docker rm -f gestion-foyers-container 2>/dev/null || true
           docker run -d --name gestion-foyers-container \
             -p 8081:8080 \
-            mohamed284/gestion-foyers:latest
+            ${DOCKERHUB_USER}/gestion-foyers:latest
+        '''
+      }
+    }
+
+    stage('DAST - OWASP ZAP') {
+      steps {
+        sh '''
+          docker run --rm -v $(pwd):/zap/wrk/:rw --network="host" \
+            owasp/zap2docker-stable \
+            zap-baseline.py -t http://127.0.0.1:8081/tpfoyer -r zap-report.html || true
         '''
       }
     }
@@ -93,10 +114,26 @@ pipeline {
 
   post {
     always {
-      // Rapports OWASP Dependency-Check
-      archiveArtifacts artifacts: 'target/dependency-check-report.*', allowEmptyArchive: true
-      // Rapports tests JUnit
       junit 'target/surefire-reports/*.xml'
+      archiveArtifacts artifacts: 'target/dependency-check-report.html', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'zap-report.html', allowEmptyArchive: true
+    }
+    success {
+      slackSend (
+        channel: '#devsecops-pipeline',
+        color: 'good',
+        tokenCredentialId: 'slack-token',
+        message: "✅ Build #${env.BUILD_NUMBER} SUCCESS on ${env.JOB_NAME} (${env.GIT_COMMIT})"
+      )
+    }
+    failure {
+      slackSend (
+        channel: '#devsecops-pipeline',
+        color: 'danger',
+        tokenCredentialId: 'slack-token',
+        message: "❌ Build #${env.BUILD_NUMBER} FAILED on ${env.JOB_NAME} (commit ${env.GIT_COMMIT})"
+      )
     }
   }
 }
