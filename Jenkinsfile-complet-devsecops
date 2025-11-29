@@ -2,8 +2,8 @@ pipeline {
   agent any
 
   environment {
-    PATH = "/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    SEMGREP_API_KEY = credentials('semgrep-api-key')
+    // Adapter si besoin (nom du serveur Sonar dans Jenkins)
+    SONARQUBE_ENV = 'Sonar'
   }
 
   stages {
@@ -12,17 +12,9 @@ pipeline {
       steps { checkout scm }
     }
 
-    stage('Build') {
-      steps { echo 'Building project...' }
-    }
-
-    stage('Unit Tests') {
+    stage('Build & Unit Tests') {
       steps {
-        sh '''
-          python3 -m pip install --user pytest pytest-cov || true
-          pytest --maxfail=1 --disable-warnings \
-            --cov=. --cov-report=xml || true
-        '''
+        sh 'mvn clean verify'
       }
     }
 
@@ -31,75 +23,46 @@ pipeline {
         scannerHome = tool 'SonarScanner'
       }
       steps {
-        withSonarQubeEnv('Sonar') {
+        withSonarQubeEnv(SONARQUBE_ENV) {
           sh """
             ${scannerHome}/bin/sonar-scanner \
               -Dsonar.projectKey=gestion-des-foyers \
               -Dsonar.projectName=gestion-des-foyers \
-              -Dsonar.sources=. \
-              -Dsonar.exclusions=**/*.java \
-              -Dsonar.python.coverage.reportPaths=coverage.xml
+              -Dsonar.sources=src/main/java \
+              -Dsonar.tests=src/test/java \
+              -Dsonar.java.binaries=target/classes \
+              -Dsonar.junit.reportPaths=target/surefire-reports \
+              -Dsonar.jacoco.reportPaths=target/site/jacoco/jacoco.xml
           """
         }
       }
     }
 
-    stage('SAST - Bandit') {
+    stage('OWASP Dependency Check') {
       steps {
-        sh '''
-          python3 -m pip install --user --upgrade bandit || true
-          bandit -r . -f json -o bandit.json || true
-        '''
+        sh 'mvn org.owasp:dependency-check-maven:check'
       }
     }
 
-    stage('SAST - Semgrep') {
-      environment {
-        PATH = "${env.PATH}:${env.HOME}/.local/bin"
-      }
-      steps {
-        sh '''
-          python3 -m pip install --user --upgrade semgrep || true
-          semgrep login --api-key $SEMGREP_API_KEY || true
-          semgrep --config=p/ci --json --output semgrep.json || true
-        '''
-      }
-    }
-
-    stage('SCA & FS scan - Trivy') {
-      steps {
-        sh '''
-          rm -f trivy-fs.json || true
-          trivy fs --scanners vuln,misconfig,secret \
-            --severity HIGH,CRITICAL \
-            --format json -o trivy-fs.json . || true
-        '''
-      }
-    }
-
-    stage('Secrets - Gitleaks') {
-      steps {
-        sh '''
-          gitleaks detect --source . \
-            --baseline-path gitleaks-baseline.json \
-            --report-format json \
-            --report-path gitleaks.json || true
-        '''
-      }
-    }
-
-    // 1) Build image locale + tags Docker Hub
     stage('Docker Build') {
       steps {
         sh """
-          docker build -t medchennouf/gestion-foyers:latest .
-          docker tag medchennouf/gestion-foyers:latest medchennouf/gestion-foyers:${env.BUILD_NUMBER}
+          docker build -t mohamed284/gestion-foyers:latest .
+          docker tag mohamed284/gestion-foyers:latest mohamed284/gestion-foyers:${env.BUILD_NUMBER}
         """
       }
     }
 
-    // 2) Push automatique sur Docker Hub
-    stage('Docker Push DockerHub') {
+    stage('Trivy Image Scan') {
+      steps {
+        sh '''
+          trivy image --severity HIGH,CRITICAL \
+            --format table mohamed284/gestion-foyers:latest || true
+        '''
+      }
+    }
+
+    stage('Push DockerHub') {
       steps {
         withCredentials([usernamePassword(
           credentialsId: 'dockerhub-creds',
@@ -108,113 +71,11 @@ pipeline {
         )]) {
           sh '''
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-            docker push medchennouf/gestion-foyers:latest
-            docker push medchennouf/gestion-foyers:${BUILD_NUMBER}
+            docker push mohamed284/gestion-foyers:latest
+            docker push mohamed284/gestion-foyers:${BUILD_NUMBER}
             docker logout || true
           '''
         }
-      }
-    }
-
-    stage('Trivy - Image scan') {
-      steps {
-        sh '''
-          rm -f trivy-image.json || true
-          trivy image --scanners vuln,misconfig,secret \
-            --severity HIGH,CRITICAL \
-            --format json -o trivy-image.json medchennouf/gestion-foyers:latest || true
-        '''
-      }
-    }
-
-    stage('DAST - ZAP Baseline') {
-      steps {
-        sh '''
-          mkdir -p zap-reports
-          docker run --rm \
-            -v $(pwd)/zap-reports:/zap/wrk/:rw \
-            ghcr.io/zaproxy/zaproxy:latest zap-baseline.py \
-              -t "http://192.168.50.4:8080" \
-              -r baseline_report.html \
-              -J baseline_report.json || true
-        '''
-      }
-    }
-
-    stage('Final security check') {
-      steps {
-        sh '''
-          python3 - <<'PY'
-import json, os, sys
-fail = False
-
-# Bandit (log-only)
-if os.path.exists("bandit.json"):
-  try:
-    b = json.load(open("bandit.json"))
-    vuln = [r for r in b.get("results", []) if r.get("issue_severity") in ("MEDIUM", "HIGH")]
-    if vuln:
-      print("Bandit MEDIUM/HIGH (not blocking for this demo):", len(vuln))
-  except Exception as e:
-    print("Error reading bandit.json:", e)
-
-# Semgrep (log-only)
-if os.path.exists("semgrep.json"):
-  try:
-    s = json.load(open("semgrep.json"))
-    if s.get("results"):
-      print("Semgrep findings (not blocking for this demo):", len(s.get("results")))
-  except Exception as e:
-    print("Error reading semgrep.json:", e)
-
-# Trivy FS (log-only)
-if os.path.exists("trivy-fs.json"):
-  try:
-    t = json.load(open("trivy-fs.json"))
-    has = [r for r in t.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
-    if has:
-      print("Trivy FS issues (not blocking for this demo):", len(has))
-  except Exception as e:
-    print("Error reading trivy-fs.json:", e)
-
-# Trivy Image (log-only)
-if os.path.exists("trivy-image.json"):
-  try:
-    ti = json.load(open("trivy-image.json"))
-    hasimg = [r for r in ti.get("Results", []) if r.get("Vulnerabilities") or r.get("Misconfigurations") or r.get("Secrets")]
-    if hasimg:
-      print("Trivy image issues (not blocking for this demo):", len(hasimg))
-  except Exception as e:
-    print("Error reading trivy-image.json:", e)
-
-# Gitleaks (bloquant)
-if os.path.exists("gitleaks.json"):
-  try:
-    g = json.load(open("gitleaks.json"))
-    if g:
-      print("Gitleaks secrets found:", len(g))
-      fail = True
-  except Exception as e:
-    print("Error reading gitleaks.json:", e)
-
-# ZAP baseline (bloquant)
-if os.path.exists("zap-reports/baseline_report.json"):
-  try:
-    z = json.load(open("zap-reports/baseline_report.json"))
-    fails = z.get("fail", 0) if isinstance(z, dict) else 0
-    if fails:
-      print("ZAP baseline fail:", fails)
-      fail = True
-  except Exception as e:
-    print("Unable to parse ZAP baseline_report.json:", e)
-
-if fail:
-  print("Security gates failed")
-  sys.exit(1)
-else:
-  print("All clear")
-PY
-        '''
       }
     }
 
@@ -223,8 +84,8 @@ PY
         sh '''
           docker rm -f gestion-foyers-container 2>/dev/null || true
           docker run -d --name gestion-foyers-container \
-            -p 5001:8080 \
-            medchennouf/gestion-foyers:latest
+            -p 8080:8080 \
+            mohamed284/gestion-foyers:latest
         '''
       }
     }
@@ -232,30 +93,10 @@ PY
 
   post {
     always {
-      archiveArtifacts artifacts: '**/*.json', allowEmptyArchive: true
-      archiveArtifacts artifacts: 'zap-reports/*', allowEmptyArchive: true
-      publishHTML([
-        reportDir: 'zap-reports',
-        reportFiles: 'baseline_report.html',
-        reportName: 'OWASP ZAP Report',
-        allowMissing: true,
-        keepAll: true,
-        alwaysLinkToLastBuild: true
-      ])
-    }
-    success {
-      slackSend(
-        channel: '#devsecops-pipeline',
-        color: 'good',
-        message: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${env.BUILD_URL}"
-      )
-    }
-    failure {
-      slackSend(
-        channel: '#devsecops-pipeline',
-        color: 'danger',
-        message: "FAILURE: ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${env.BUILD_URL}"
-      )
+      // Rapports OWASP Dependency-Check
+      archiveArtifacts artifacts: 'target/dependency-check-report.*', allowEmptyArchive: true
+      // Rapports tests JUnit
+      junit 'target/surefire-reports/*.xml'
     }
   }
 }
