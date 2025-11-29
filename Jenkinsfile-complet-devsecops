@@ -84,7 +84,7 @@ pipeline {
         sh '''
           docker rm -f gestion-foyers-container 2>/dev/null || true
           docker run -d --name gestion-foyers-container \
-            -p 8080:8080 \
+            -p 8081:8080 \
             mohamed284/gestion-foyers:latest
         '''
       }
