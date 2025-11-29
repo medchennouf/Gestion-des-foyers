@@ -60,6 +60,7 @@ pipeline {
       steps {
         sh '''
           python3 -m pip install --user --upgrade semgrep || true
+          semgrep login --api-key $SEMGREP_API_KEY || true
           semgrep --config=p/ci --json --output semgrep.json || true
         '''
       }
@@ -87,9 +88,31 @@ pipeline {
       }
     }
 
+    // 1) Build image locale + tags Docker Hub
     stage('Docker Build') {
       steps {
-        sh 'docker build -t gestion-foyers:latest . || true'
+        sh """
+          docker build -t medchennouf/gestion-foyers:latest .
+          docker tag medchennouf/gestion-foyers:latest medchennouf/gestion-foyers:${env.BUILD_NUMBER}
+        """
+      }
+    }
+
+    // 2) Push automatique sur Docker Hub
+    stage('Docker Push DockerHub') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-creds',
+          usernameVariable: 'DOCKERHUB_USER',
+          passwordVariable: 'DOCKERHUB_PASS'
+        )]) {
+          sh '''
+            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+            docker push medchennouf/gestion-foyers:latest
+            docker push medchennouf/gestion-foyers:${BUILD_NUMBER}
+            docker logout || true
+          '''
+        }
       }
     }
 
@@ -99,7 +122,7 @@ pipeline {
           rm -f trivy-image.json || true
           trivy image --scanners vuln,misconfig,secret \
             --severity HIGH,CRITICAL \
-            --format json -o trivy-image.json gestion-foyers:latest || true
+            --format json -o trivy-image.json medchennouf/gestion-foyers:latest || true
         '''
       }
     }
@@ -107,9 +130,7 @@ pipeline {
     stage('DAST - ZAP Baseline') {
       steps {
         sh '''
-          rm -rf zap-reports
           mkdir -p zap-reports
-          chmod 777 zap-reports
           docker run --rm \
             -v $(pwd)/zap-reports:/zap/wrk/:rw \
             ghcr.io/zaproxy/zaproxy:latest zap-baseline.py \
@@ -203,7 +224,7 @@ PY
           docker rm -f gestion-foyers-container 2>/dev/null || true
           docker run -d --name gestion-foyers-container \
             -p 5001:8080 \
-            gestion-foyers:latest
+            medchennouf/gestion-foyers:latest
         '''
       }
     }
