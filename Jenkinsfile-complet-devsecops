@@ -4,7 +4,7 @@ pipeline {
   environment {
     SONAR_HOST_URL    = 'http://192.168.50.4:9000'
     SONAR_PROJECT_KEY = 'gestion-des-foyers'
-    SONAR_LOGIN       = credentials('Sonar')            
+    SONAR_LOGIN       = credentials('Sonar')
     DOCKERHUB_USER    = 'mohamed284'
     DOCKERHUB_PASS    = credentials('dockerhub-credentials')
     SLACK_TOKEN       = credentials('slack-token')
@@ -22,7 +22,7 @@ pipeline {
       steps {
         sh '''
           docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest \
-            detect -s /repo -f json -r gitleaks-report.json || true
+            detect -s /repo -f json -r gitleaks.json || true
         '''
       }
     }
@@ -118,9 +118,12 @@ pipeline {
 
   post {
     always {
+      // Tests unitaires
       junit 'target/surefire-reports/*.xml'
-      archiveArtifacts artifacts: 'target/dependency-check-report.html', allowEmptyArchive: true
-      archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
+
+      // Rapports sécurité
+      archiveArtifacts artifacts: 'target/dependency-check-report.xml', allowEmptyArchive: true
+      archiveArtifacts artifacts: 'gitleaks.json', allowEmptyArchive: true
       archiveArtifacts artifacts: 'zap-report.html', allowEmptyArchive: true
     }
     success {
