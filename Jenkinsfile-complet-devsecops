@@ -109,7 +109,7 @@ pipeline {
       steps {
         sh '''
           docker run --rm -v $(pwd):/zap/wrk/:rw --network="host" \
-            owasp/zap2docker-stable \
+            ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py -t http://127.0.0.1:8081/tpfoyer -r zap-report.html || true
         '''
       }
