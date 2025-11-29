@@ -2,12 +2,12 @@ pipeline {
   agent any
 
   environment {
-    SONAR_HOST_URL   = 'http://192.168.50.4:9000'
+    SONAR_HOST_URL    = 'http://192.168.50.4:9000'
     SONAR_PROJECT_KEY = 'gestion-des-foyers'
-    SONAR_LOGIN      = credentials('Sonar')        // cf. ta capture, OK
-    DOCKERHUB_USER   = 'mohamed284'
-    DOCKERHUB_PASS   = credentials('dockerhub-credentials')
-    SLACK_TOKEN      = credentials('slack-token')
+    SONAR_LOGIN       = credentials('Sonar')            
+    DOCKERHUB_USER    = 'mohamed284'
+    DOCKERHUB_PASS    = credentials('dockerhub-credentials')
+    SLACK_TOKEN       = credentials('slack-token')
   }
 
   stages {
@@ -79,7 +79,11 @@ pipeline {
 
     stage('Push DockerHub') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-credentials',
+          usernameVariable: 'USER',
+          passwordVariable: 'PASS'
+        )]) {
           sh '''
             echo "$PASS" | docker login -u "$USER" --password-stdin
             docker push ${DOCKERHUB_USER}/gestion-foyers:latest
@@ -132,7 +136,7 @@ pipeline {
         channel: '#devsecops-pipeline',
         color: 'danger',
         tokenCredentialId: 'slack-token',
-        message: "❌ Build #${env.BUILD_NUMBER} FAILED on ${env.JOB_NAME} (commit ${env.GIT_COMMIT})"
+        message: "❌ Build #${env.BUILD_NUMBER} FAILED on ${env.JOB_NAME} (${env.GIT_COMMIT})"
       )
     }
   }
